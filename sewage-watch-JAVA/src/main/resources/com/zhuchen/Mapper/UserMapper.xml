@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.zhuchen.Mapper.UserMapper">
+    <insert id="addUser" useGeneratedKeys="true" keyProperty="id">
+        INSERT INTO user(userName, password, name, role)
+        VALUES (#{userName}, #{password}, #{name}, 'PUBLIC')
+    </insert>
+
+    <update id="updateUser">
+        UPDATE user
+        <set>
+            <if test="userName != null">
+                userName = #{userName},
+            </if>
+            <if test="password != null">
+                password = #{password},
+            </if>
+            <if test="name != null">
+                name = #{name},
+            </if>
+            <if test="role != null">
+                role = #{role},
+            </if>
+            <if test="enabled != null">
+                enabled = #{enabled},
+            </if>
+        </set>
+        WHERE id = #{id}
+    </update>
+
+    <select id="findUser" resultType="com.zhuchen.project.User">
+        SELECT * FROM user
+        <where>
+            <if test="userName != null">
+                AND userName = #{userName}
+            </if>
+            <if test="password != null">
+                AND password = #{password}
+            </if>
+            <if test="name != null">
+                AND name = #{name}
+            </if>
+            <if test="role != null">
+                AND role = #{role}
+            </if>
+            <if test="enabled != null">
+                AND enabled = #{enabled}
+            </if>
+            <if test="updateTime != null">
+                AND updateTime = #{updateTime}
+            </if>
+        </where>
+    </select>
+
+    <delete id="deleteUserById">
+        DELETE FROM user WHERE id=#{id};
+    </delete>
+
+</mapper>

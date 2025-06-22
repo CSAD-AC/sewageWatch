@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.zhuchen.Mapper.TaskMapper">
+    <update id="updateTaskBy">
+        update task
+        <set>
+            <if test="title != null">
+                title = #{title},
+            </if>
+            <if test="description != null">
+                description = #{description},
+            </if>
+            <if test="status != null">
+                status = #{status},
+            </if>
+            <if test="priority != null">
+                priority = #{priority},
+            </if>
+            <if test="deadline != null">
+                deadline = #{deadline},
+            </if>
+        </set> WHERE id = #{id}
+    </update>
+    <delete id="deleteTaskById">
+        delete from task where id=#{id}
+    </delete>
+    <select id="findTask" resultType="com.zhuchen.project.task.Task">
+        SELECT * FROM task
+        <where>
+            <if test="id != null">
+                id = #{id}
+            </if>
+            <if test="title != null">
+                AND title LIKE CONCAT('%', #{title}, '%')
+            </if>
+            <if test="description != null">
+                AND description LIKE CONCAT('%', #{description}, '%')
+            </if>
+            <if test="status != null">
+                AND status = #{status}
+            </if>
+            <if test="priority != null">
+                AND priority = #{priority}
+            </if>
+            <if test="deadline != null">
+                <![CDATA[
+                AND deadline <= #{deadline}
+               ]]>
+            </if>
+            <if test="createdTime != null and createdTimeEnd != null">
+                <![CDATA[
+                AND createdTime >= #{createdTime} AND createdTime <= #{createdTimeEnd}
+                ]]>
+            </if>
+        </where>
+    </select>
+
+    <insert id="addTask" useGeneratedKeys="true" keyProperty="id">
+        insert into task(title, description, status, priority, deadline)
+        values(#{title}, #{description}, #{status}, #{priority}, #{deadline})
+    </insert>
+</mapper>
