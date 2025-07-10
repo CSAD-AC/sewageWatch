@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<config>
+    <rtmp>
+        <url>rtmp://localhost:1935/live/stream1</url>
+        <description>默认RTMP视频流地址</description>
+    </rtmp>
+    <settings>
+        <buffer_size>30</buffer_size>
+        <fps>60</fps>
+        <reconnect_delay>5</reconnect_delay>
+        <timeout>10</timeout>
+    </settings>
+</config>

@@ -24,6 +24,7 @@ public class UserDaoTest {
         user = new User();
         user.setUserName("testuser");
         user.setPassword("$2a$10$7QoNuH0waGWfvDD.HIGZFO1o7EefHfAfwxM2nQanXkyL6/7H2gxyW");
+        user.setName("testuser");
         user.setRole("PUBLIC");
         user.setEnabled(true);
         user.setUpdateTime(LocalDateTime.now());

@@ -95,7 +95,7 @@ const handleLogin = async () => {
     })
 
     // 登录成功
-    const { token, userInfo } = res.data
+    const  token = res.data.token
     localStorage.setItem('token', token)
     
     ElMessage.success('登录成功')
