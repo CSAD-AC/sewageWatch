@@ -32,10 +32,16 @@
         <img v-if="imageData" :src="imageData" alt="视频流" class="video-stream" />
         
         <!-- 加载状态 -->
-        <el-empty v-else-if="!isConnected" :description="getLoadingText()" v-loading="true" />
+        <el-empty v-else-if="!isConnected && isConnecting" :description="getLoadingText()" v-loading="true" />
         
         <!-- 错误状态 -->
-        <el-empty v-else description="视频流连接失败" />
+        <el-empty v-else-if="!isConnected" description="视频流连接失败">
+          <template #extra>
+            <el-button type="primary" @click="retryConnection" :loading="isConnecting">
+              {{ isConnecting ? '连接中...' : '重试连接' }}
+            </el-button>
+          </template>
+        </el-empty>
       </div>
 
       <!-- 数据展示 -->
@@ -96,15 +102,32 @@ const getSourceText = () => {
 const handleWebSocketMessage = (event) => {
   try {
     const data = JSON.parse(event.data)
+    
+    // 验证数据完整性
+    if (!data.image) {
+      console.warn('收到的数据缺少图像信息')
+      return
+    }
+    
+    // 更新图像数据
     imageData.value = `data:image/jpeg;base64,${data.image}`
+    
+    // 更新流数据，使用默认值处理可能缺失的字段
     streamData.value = {
-      fps: data.fps,
-      speed: data.speed,
-      weather: data.weather,
+      fps: data.fps || 0,
+      speed: data.speed || 0,
+      weather: data.weather || '未知',
       source: data.source || '本地'
+    }
+    
+    // 第一次收到数据时显示通知
+    if (isConnecting.value) {
+      isConnecting.value = false
+      isConnected.value = true
     }
   } catch (error) {
     console.error('解析视频流数据失败:', error)
+    // 不要因为单次解析错误就断开连接，继续等待有效数据
   }
 }
 
@@ -133,24 +156,60 @@ const handleWebSocketClose = (sourceName, event) => {
 const connectLocalVideo = () => {
   closeWebSocket()
   isConnecting.value = true
+  imageData.value = null
+  streamData.value = null
   
-  ws.value = new WebSocket('ws://localhost:8081/ws/video')
+  // 设置连接超时
+  const connectionTimeout = setTimeout(() => {
+    if (ws.value && ws.value.readyState !== WebSocket.OPEN) {
+      ElMessage.error('本地视频流连接超时')
+      closeWebSocket()
+      isConnecting.value = false
+    }
+  }, 10000) // 10秒超时
+  
+  try {
+    ws.value = new WebSocket('ws://localhost:8081/ws/video')
 
-  ws.value.onopen = () => {
-    isConnected.value = true
+    ws.value.onopen = () => {
+      clearTimeout(connectionTimeout)
+      isConnected.value = true
+      isConnecting.value = false
+      ElMessage.success('本地视频流连接成功')
+      
+      // 设置数据接收超时
+      startDataTimeout()
+    }
+
+    ws.value.onmessage = (event) => {
+      // 重置数据超时计时器
+      resetDataTimeout()
+      handleWebSocketMessage(event)
+    }
+    
+    ws.value.onerror = (error) => {
+      clearTimeout(connectionTimeout)
+      handleWebSocketError(error)
+    }
+    
+    ws.value.onclose = (event) => {
+      clearTimeout(connectionTimeout)
+      handleWebSocketClose('本地视频流', event)
+    }
+  } catch (error) {
+    clearTimeout(connectionTimeout)
+    ElMessage.error(`本地视频流连接失败: ${error.message}`)
     isConnecting.value = false
-    ElMessage.success('本地视频流连接成功')
+    console.error('WebSocket创建错误:', error)
   }
-
-  ws.value.onmessage = handleWebSocketMessage
-  ws.value.onerror = handleWebSocketError
-  ws.value.onclose = (event) => handleWebSocketClose('本地视频流', event)
 }
 
 // 连接RTMP流
 const connectRTMP = () => {
   closeWebSocket()
   isConnecting.value = true
+  imageData.value = null
+  streamData.value = null
   
   let wsUrl = 'ws://localhost:8081/ws/rtmp';
   
@@ -160,24 +219,79 @@ const connectRTMP = () => {
     wsUrl = `${wsUrl}?rtmp_url=${encodedUrl}`;
   }
   
-  ws.value = new WebSocket(wsUrl)
+  // 设置连接超时
+  const connectionTimeout = setTimeout(() => {
+    if (ws.value && ws.value.readyState !== WebSocket.OPEN) {
+      ElMessage.error('RTMP流连接超时，请检查流地址是否正确')
+      closeWebSocket()
+      isConnecting.value = false
+    }
+  }, 10000) // 10秒超时
+  
+  try {
+    ws.value = new WebSocket(wsUrl)
 
-  ws.value.onopen = () => {
-    isConnected.value = true
+    ws.value.onopen = () => {
+      clearTimeout(connectionTimeout)
+      isConnected.value = true
+      isConnecting.value = false
+      ElMessage.success('RTMP流连接成功')
+      
+      // 设置数据接收超时
+      startDataTimeout()
+    }
+
+    ws.value.onmessage = (event) => {
+      // 重置数据超时计时器
+      resetDataTimeout()
+      handleWebSocketMessage(event)
+    }
+    
+    ws.value.onerror = (error) => {
+      clearTimeout(connectionTimeout)
+      handleWebSocketError(error)
+    }
+    
+    ws.value.onclose = (event) => {
+      clearTimeout(connectionTimeout)
+      handleWebSocketClose('RTMP流', event)
+    }
+  } catch (error) {
+    clearTimeout(connectionTimeout)
+    ElMessage.error(`RTMP流连接失败: ${error.message}`)
     isConnecting.value = false
-    ElMessage.success('RTMP流连接成功')
+    console.error('WebSocket创建错误:', error)
   }
+}
 
-  ws.value.onmessage = handleWebSocketMessage
-  ws.value.onerror = handleWebSocketError
-  ws.value.onclose = (event) => handleWebSocketClose('RTMP流', event)
+// 数据接收超时处理
+let dataTimeoutId = null
+
+const startDataTimeout = () => {
+  dataTimeoutId = setTimeout(() => {
+    if (isConnected.value && !streamData.value) {
+      ElMessage.warning('RTMP流连接成功但未收到数据，请检查流地址是否有效')
+      // 不断开连接，继续等待数据
+    }
+  }, 8000) // 8秒内没收到数据就提示
+}
+
+const resetDataTimeout = () => {
+  if (dataTimeoutId) {
+    clearTimeout(dataTimeoutId)
+    dataTimeoutId = null
+  }
 }
 
 // 切换流类型
 const switchStreamType = (type) => {
+  // 清除当前状态
+  resetDataTimeout()
   imageData.value = null
   streamData.value = null
+  isConnected.value = false
   
+  // 根据类型连接不同的流
   if (type === 'local') {
     connectLocalVideo()
   } else if (type === 'rtmp') {
@@ -185,12 +299,34 @@ const switchStreamType = (type) => {
   }
 }
 
+// 重试当前连接
+const retryConnection = () => {
+  if (streamType.value === 'local') {
+    connectLocalVideo()
+  } else if (streamType.value === 'rtmp') {
+    connectRTMP()
+  }
+}
+
 // 关闭WebSocket连接
 const closeWebSocket = () => {
-  if (ws.value && ws.value.readyState === WebSocket.OPEN) {
-    ws.value.close()
+  // 清除所有超时计时器
+  resetDataTimeout()
+  
+  if (ws.value) {
+    // 移除所有事件监听器
+    ws.value.onopen = null
+    ws.value.onmessage = null
+    ws.value.onerror = null
+    ws.value.onclose = null
+    
+    // 关闭连接
+    if (ws.value.readyState === WebSocket.OPEN || 
+        ws.value.readyState === WebSocket.CONNECTING) {
+      ws.value.close()
+    }
+    ws.value = null
   }
-  ws.value = null
 }
 
 // 组件挂载时连接本地视频
@@ -198,8 +334,11 @@ onMounted(() => {
   connectLocalVideo()
 })
 
-// 组件卸载时关闭WebSocket
+// 组件卸载时清理资源
 onUnmounted(() => {
+  // 清除所有超时计时器
+  resetDataTimeout()
+  // 关闭WebSocket连接
   closeWebSocket()
 })
 </script>
