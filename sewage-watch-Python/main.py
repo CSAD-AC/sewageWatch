@@ -138,7 +138,7 @@ def shutdown_event():
     clear_h264_optimizations()
 
 class VideoStreamer:
-    def __init__(self, video_source, model_path="public/yolov8n.pt"):
+    def __init__(self, video_source, model_path="public/yolov8n_7_11.pt"):
         self.video_source = video_source
         self.cap = None
         self.should_stop = False
@@ -151,6 +151,14 @@ class VideoStreamer:
 
         # 获取检测结果
         result = results[0]  # 单帧结果
+
+        #######修改
+        # 修改检测结果中的bird标签为bottle
+        for box in result.boxes:
+            cls = int(box.cls)
+            if result.names[cls] == 'bird':
+                result.names[cls] = 'bottle'
+        
 
         # 在原图上绘制边界框和标签
         annotated_frame = result.plot(
@@ -190,8 +198,9 @@ class VideoStreamer:
     async def stream_video(self, websocket):
         """流式传输视频帧"""
         try:
-            fps = self.cap.get(cv2.CAP_PROP_FPS)
-            frame_delay = 1 / fps if fps > 0 else 0.033
+            # 锁定帧率为30fps
+            fps = 30.0
+            frame_delay = 0.033  # 固定30fps
 
             while not self.should_stop and websocket.client_state == WebSocketState.CONNECTED:
                 start_time = asyncio.get_event_loop().time()
@@ -205,7 +214,7 @@ class VideoStreamer:
                 processed_frame = self.process_frame(frame)
 
                 # 编码和发送
-                await self.send_frame(websocket, processed_frame, fps)
+                await self.send_frame(websocket, processed_frame, 30.0)
 
                 # 控制帧率
                 elapsed = asyncio.get_event_loop().time() - start_time
@@ -268,7 +277,7 @@ class RTMPStreamer:
             
             # 设置额外的VideoCapture属性来处理H.264解码问题
             self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # 最小缓冲区大小
-            self.cap.set(cv2.CAP_PROP_FPS, 60)        # 设置期望帧率为60fps
+            self.cap.set(cv2.CAP_PROP_FPS, 30)        # 设置期望帧率为30fps
             
             # 尝试读取第一帧以验证连接
             ret, test_frame = self.cap.read()
@@ -306,6 +315,12 @@ class RTMPStreamer:
 
             # 获取检测结果
             result = results[0]  # 单帧结果
+
+            # 修改检测结果中的bird标签为bottle
+            for box in result.boxes:
+                cls = int(box.cls)
+                if result.names[cls] == 'bird':
+                    result.names[cls] = 'bottle'
 
             # 在原图上绘制边界框和标签
             annotated_frame = result.plot(
@@ -408,7 +423,7 @@ class RTMPStreamer:
     async def stream_video(self, websocket):
         """流式传输RTMP视频帧"""
         try:
-            frame_delay = 0.0167  # 约60fps
+            frame_delay = 0.033  # 锁定30fps
             
             while not self.should_stop and websocket.client_state == WebSocketState.CONNECTED:
                 start_time = asyncio.get_event_loop().time()
@@ -421,7 +436,7 @@ class RTMPStreamer:
                     processed_frame = self.process_frame(frame)
                     
                     # 编码和发送
-                    await self.send_frame(websocket, processed_frame, 60.0)
+                    await self.send_frame(websocket, processed_frame, 30.0)
                     
                 except queue.Empty:
                     # 没有新帧，等待一下

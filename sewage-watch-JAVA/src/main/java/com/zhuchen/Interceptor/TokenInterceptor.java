@@ -25,6 +25,7 @@ public class TokenInterceptor implements HandlerInterceptor {
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) {
             return true;
         }
+
         log.info("请求被拦截，正在验证token是否有足够权限");
         log.info("尝试访问{}", request.getRequestURI());
         String token = request.getHeader("Authorization");
