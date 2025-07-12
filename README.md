@@ -106,7 +106,6 @@ mysql -u root -p < createDatabase.sql
 开放端口如下:
 * 5173 ->  Vue服务
 * 1935 ->  RTMP服务器(接收端口)
-* 8000 ->  RTMP服务器(转发端口)
 * 8080 ->  Java服务
 * 8081 ->  Python服务
 ### 3. 终止服务
