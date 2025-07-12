@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.zhuchen.Mapper.HistoryMapper">
+    <delete id="deleteHistoryById">
+        DELETE FROM history WHERE id = #{id}
+    </delete>
+
+    <select id="findAllHistory" resultType="com.zhuchen.project.History">
+        SELECT * FROM history ORDER BY id
+    </select>
+
+    <select id="findHistory" resultType="com.zhuchen.project.History">
+        SELECT * FROM history
+        <where>
+            <if test="id != null">
+                id = #{id}
+            </if>
+            <if test="taskId != null">
+                AND taskId = #{taskId}
+            </if>
+            <if test="type != null">
+                AND type = #{type}
+            </if>
+            <if test="src != null">
+                AND src LIKE CONCAT('%', #{src}, '%')
+            </if>
+        </where>
+    </select>
+
+    <update id="updateHistory">
+        UPDATE history
+        <set>
+            <if test="taskId != null">
+                taskId = #{taskId},
+            </if>
+            <if test="type != null">
+                type = #{type},
+            </if>
+            <if test="src != null">
+                src = #{src},
+            </if>
+        </set>
+        WHERE id = #{id}
+    </update>
+</mapper>

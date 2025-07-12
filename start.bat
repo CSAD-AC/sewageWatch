@@ -17,7 +17,6 @@ set "Vue_cmd=cd "%BASE%\Vue" && npm run dev"
 set "Java_cmd=cd "%BASE%\sewage-watch-Java" && mvn spring-boot:run"
 
 REM 各服务工作目录
-set "FFmpeg_dir=Node.js"
 set "Node_dir=Node.js"
 set "Python_dir=sewage-watch-Python"
 set "Vue_dir=Vue"

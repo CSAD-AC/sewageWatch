@@ -2,8 +2,11 @@ import cv2
 import base64
 import asyncio
 import numpy as np
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile, Form
+import math
+from fastapi import HTTPException
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketState
 import logging
@@ -13,26 +16,182 @@ import time
 import os
 import xml.etree.ElementTree as ET
 from pathlib import Path
+import pymysql
+import datetime
+import uuid
+import shutil
+from typing import List, Optional
 
 from ultralytics import YOLO
+from detection import DetectionProcessor
 
 # 保存原始环境变量值，以便在程序退出时恢复
 original_ffmpeg_options = os.environ.get('OPENCV_FFMPEG_CAPTURE_OPTIONS')
 
-import xml.etree.ElementTree as ET
+# 配置日志
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# 解析XML配置文件
-tree = ET.parse('../config.xml')
-root = tree.getroot()
+# 创建临时目录来存储上传的文件
+TEMP_UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "temp_uploads")
+os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
 
-# 构建配置字典
-config = {
-    'rtmp_url': root.find('.//rtmp/url').text,
-    'buffer_size': int(root.find('.//settings/buffer_size').text),
-    'fps': int(root.find('.//settings/fps').text),
-    'reconnect_delay': int(root.find('.//settings/reconnect_delay').text),
-    'timeout': int(root.find('.//settings/timeout').text)
-}
+# 读取XML配置文件
+def load_config():
+    """从XML配置文件中加载配置"""
+    try:
+        config_path = Path(__file__).parent / "../config.xml"
+        if not config_path.exists():
+            logger.warning(f"配置文件不存在: {config_path}，将使用默认配置")
+            return {
+                "rtmp_url": "rtmp://example.com/live/default_stream",
+                "buffer_size": 30,
+                "fps": 60,
+                "reconnect_delay": 5,
+                "timeout": 10,
+                "db_host": "localhost",
+                "db_port": 3306,
+                "db_user": "root",
+                "db_password": "",
+                "db_name": "sewagewatch",
+                "history_path": "../history",
+                "detect_types": ["bottle", "bird"]
+            }
+        
+        tree = ET.parse(config_path)
+        root = tree.getroot()
+        
+        # 读取RTMP URL
+        rtmp_url = root.find("rtmp/url").text
+        
+        # 读取其他设置
+        settings = root.find("settings")
+        buffer_size = int(settings.find("buffer_size").text)
+        fps = int(settings.find("fps").text)
+        reconnect_delay = int(settings.find("reconnect_delay").text)
+        timeout = int(settings.find("timeout").text)
+        
+        # 读取数据库配置
+        database = root.find("database")
+        db_host = database.find("host").text
+        db_port = int(database.find("port").text)
+        db_user = database.find("user").text
+        db_password = database.find("password").text
+        db_name = database.find("name").text
+        
+        # 读取历史记录配置
+        history = root.find("history")
+        history_path = history.find("storage_path").text
+        detect_types = [type_elem.text for type_elem in history.find("detect_types").findall("type")]
+        
+        logger.info(f"已从配置文件加载RTMP URL: {rtmp_url}")
+        logger.info(f"已从配置文件加载数据库配置: {db_host}:{db_port}")
+        logger.info(f"已从配置文件加载历史记录配置: {history_path}, 检测类型: {detect_types}")
+        
+        return {
+            "rtmp_url": rtmp_url,
+            "buffer_size": buffer_size,
+            "fps": fps,
+            "reconnect_delay": reconnect_delay,
+            "timeout": timeout,
+            "db_host": db_host,
+            "db_port": db_port,
+            "db_user": db_user,
+            "db_password": db_password,
+            "db_name": db_name,
+            "history_path": history_path,
+            "detect_types": detect_types
+        }
+    except Exception as e:
+        logger.error(f"读取配置文件时出错: {e}")
+        return {
+            "rtmp_url": "rtmp://example.com/live/default_stream",
+            "buffer_size": 30,
+            "fps": 60,
+            "reconnect_delay": 5,
+            "timeout": 10,
+            "db_host": "localhost",
+            "db_port": 3306,
+            "db_user": "root",
+            "db_password": "",
+            "db_name": "sewagewatch",
+            "history_path": "../history",
+            "detect_types": ["bottle", "bird"]
+        }
+
+# 加载配置
+config = load_config()
+
+# 确保历史记录目录存在
+os.makedirs(config["history_path"], exist_ok=True)
+
+# 数据库连接函数
+def get_db_connection():
+    """创建并返回数据库连接"""
+    try:
+        connection = pymysql.connect(
+            host=config["db_host"],
+            port=config["db_port"],
+            user=config["db_user"],
+            password=config["db_password"],
+            database=config["db_name"],
+            charset='utf8mb4',
+            cursorclass=pymysql.cursors.DictCursor
+        )
+        return connection
+    except Exception as e:
+        logger.error(f"数据库连接失败: {e}")
+        return None
+
+# 初始化数据库表
+def init_database():
+    """确保数据库表存在"""
+    try:
+        connection = get_db_connection()
+        if connection:
+            with connection.cursor() as cursor:
+                # 创建历史记录表
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS history (
+                    id INT PRIMARY KEY AUTO_INCREMENT COMMENT '历史ID',
+                    taskId INT COMMENT '关联的任务ID',
+                    type VARCHAR(20) NOT NULL COMMENT '污染类型',
+                    src VARCHAR(255) NOT NULL COMMENT '污染图片路径',
+                    createdTime DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='历史记录表';
+                """)
+                connection.commit()
+                logger.info("数据库表初始化成功")
+            connection.close()
+        else:
+            logger.error("无法初始化数据库表，连接失败")
+    except Exception as e:
+        logger.error(f"初始化数据库表失败: {e}")
+
+# 保存历史记录到数据库
+def save_history_record(type_name, image_path, task_id=None):
+    """保存历史记录到数据库"""
+    try:
+        connection = get_db_connection()
+        if connection:
+            with connection.cursor() as cursor:
+                # 插入历史记录
+                sql = """
+                INSERT INTO history (taskId, type, src, createdTime)
+                VALUES (%s, %s, %s, %s)
+                """
+                now = datetime.datetime.now()
+                cursor.execute(sql, (task_id, type_name, image_path, now))
+                connection.commit()
+                logger.info(f"历史记录已保存: {type_name}, {image_path}")
+            connection.close()
+            return True
+        else:
+            logger.error("无法保存历史记录，数据库连接失败")
+            return False
+    except Exception as e:
+        logger.error(f"保存历史记录失败: {e}")
+        return False
 
 def apply_h264_optimizations():
     """设置环境变量以优化FFmpeg的H.264解码"""
@@ -63,60 +222,6 @@ def clear_h264_optimizations():
         os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = original_ffmpeg_options
         logger.info("已恢复原始FFmpeg环境变量。")
 
-# 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# 读取XML配置文件
-def load_config():
-    """从XML配置文件中加载配置"""
-    try:
-        config_path = Path(__file__).parent / "../config.xml"
-        if not config_path.exists():
-            logger.warning(f"配置文件不存在: {config_path}，将使用默认配置")
-            return {
-                "rtmp_url": "rtmp://example.com/live/default_stream",
-                "buffer_size": 30,
-                "fps": 60,
-                "reconnect_delay": 5,
-                "timeout": 10
-            }
-        
-        tree = ET.parse(config_path)
-        root = tree.getroot()
-        
-        # 读取RTMP URL
-        rtmp_url = root.find("rtmp/url").text
-        
-        # 读取其他设置
-        settings = root.find("settings")
-        buffer_size = int(settings.find("buffer_size").text)
-        fps = int(settings.find("fps").text)
-        reconnect_delay = int(settings.find("reconnect_delay").text)
-        timeout = int(settings.find("timeout").text)
-        
-        logger.info(f"已从配置文件加载RTMP URL: {rtmp_url}")
-        
-        return {
-            "rtmp_url": rtmp_url,
-            "buffer_size": buffer_size,
-            "fps": fps,
-            "reconnect_delay": reconnect_delay,
-            "timeout": timeout
-        }
-    except Exception as e:
-        logger.error(f"读取配置文件时出错: {e}")
-        return {
-            "rtmp_url": "rtmp://example.com/live/default_stream",
-            "buffer_size": 30,
-            "fps": 60,
-            "reconnect_delay": 5,
-            "timeout": 10
-        }
-
-# 加载配置
-config = load_config()
-
 app = FastAPI()
 
 app.add_middleware(
@@ -125,17 +230,184 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "Content-Length"],
 )
+
+# 添加请求日志中间件
+@app.middleware("http")
+async def log_requests(request, call_next):
+    start_time = time.time()
+    path = request.url.path
+    method = request.method
+    
+    logger.info(f"开始处理请求: {method} {path}")
+    
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        logger.info(f"请求处理完成: {method} {path} - 状态码: {response.status_code} - 耗时: {process_time:.4f}秒")
+        return response
+    except Exception as e:
+        process_time = time.time() - start_time
+        logger.error(f"请求处理异常: {method} {path} - 耗时: {process_time:.4f}秒 - 错误: {str(e)}")
+        raise
+
+# 配置静态文件服务，使前端能够访问历史图片
+history_dir = Path(config["history_path"])
+app.mount("/history", StaticFiles(directory=str(history_dir)), name="history")
 
 @app.on_event("startup")
 async def startup_event():
     """应用启动时执行"""
     apply_h264_optimizations()
+    init_database()
 
 @app.on_event("shutdown")
 def shutdown_event():
     """应用关闭时执行"""
     clear_h264_optimizations()
+    
+    # 清理临时上传目录
+    try:
+        for file in os.listdir(TEMP_UPLOAD_DIR):
+            file_path = os.path.join(TEMP_UPLOAD_DIR, file)
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        logger.info("已清理临时上传目录")
+    except Exception as e:
+        logger.error(f"清理临时上传目录时出错: {e}")
+
+# 创建检测处理器实例
+detection_processor = DetectionProcessor(
+    model_path="public/yolov8n_7_11.pt",
+    history_path=config["history_path"],
+    detect_types=config["detect_types"]
+)
+
+@app.post("/detect/image")
+async def detect_image(file: UploadFile = File(...)):
+    """
+    处理上传的图片文件
+    """
+    file_path = None
+    try:
+        logger.info(f"接收到图片上传请求: {file.filename}, 类型: {file.content_type}")
+        
+        # 检查文件类型
+        if not file.content_type.startswith("image/"):
+            logger.warning(f"文件类型不支持: {file.content_type}")
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": f"只支持图片文件，收到的是: {file.content_type}"}
+            )
+        
+        # 确保临时目录存在
+        os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+        
+        # 生成唯一文件名，避免文件名冲突
+        unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
+        file_path = os.path.join(TEMP_UPLOAD_DIR, unique_filename)
+        
+        # 保存上传的文件到临时目录
+        logger.info(f"正在保存上传的图片到: {file_path}")
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        logger.info(f"已保存上传的图片: {file_path}, 大小: {os.path.getsize(file_path)} 字节")
+        
+        # 处理图片
+        logger.info(f"开始处理图片: {file_path}")
+        result = detection_processor.process_image(file_path)
+        logger.info(f"图片处理完成: {file_path}, 结果: {result.get('success', False)}")
+        
+        # 如果检测成功，保存到数据库
+        if result.get("success", False):
+            logger.info("检测成功，正在保存到数据库")
+            detection_processor.save_to_database(get_db_connection, result)
+            logger.info("已保存到数据库")
+        else:
+            logger.warning(f"检测未成功: {result.get('error', '未知错误')}")
+        
+        return result
+    except Exception as e:
+        logger.error(f"处理上传图片时出错: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"处理图片时出错: {str(e)}"}
+        )
+    finally:
+        # 确保临时文件被删除
+        if file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+                logger.info(f"已删除临时文件: {file_path}")
+            except Exception as e:
+                logger.error(f"删除临时文件失败: {file_path}, 错误: {e}")
+
+@app.post("/detect/video")
+async def detect_video(
+    file: UploadFile = File(...),
+    frame_interval: int = Form(30)  # 默认每30帧处理一次
+):
+    """
+    处理上传的视频文件
+    """
+    file_path = None
+    try:
+        logger.info(f"接收到视频上传请求: {file.filename}, 类型: {file.content_type}, 帧间隔: {frame_interval}")
+        
+        # 检查文件类型
+        if not file.content_type.startswith("video/"):
+            logger.warning(f"文件类型不支持: {file.content_type}")
+            return JSONResponse(
+                status_code=400,
+                content={"success": False, "error": f"只支持视频文件，收到的是: {file.content_type}"}
+            )
+        
+        # 确保临时目录存在
+        os.makedirs(TEMP_UPLOAD_DIR, exist_ok=True)
+        
+        # 生成唯一文件名，避免文件名冲突
+        unique_filename = f"{uuid.uuid4().hex}_{file.filename}"
+        file_path = os.path.join(TEMP_UPLOAD_DIR, unique_filename)
+        
+        # 保存上传的文件到临时目录
+        logger.info(f"正在保存上传的视频到: {file_path}")
+        with open(file_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+        
+        logger.info(f"已保存上传的视频: {file_path}, 大小: {os.path.getsize(file_path)} 字节")
+        
+        # 处理视频
+        logger.info(f"开始处理视频: {file_path}, 帧间隔: {frame_interval}")
+        result = detection_processor.process_video(file_path, frame_interval=frame_interval)
+        logger.info(f"视频处理完成: {file_path}, 结果: {result.get('success', False)}")
+        
+        # 如果检测成功，保存到数据库
+        if result.get("success", False):
+            logger.info("检测成功，正在保存到数据库")
+            detection_processor.save_to_database(get_db_connection, result)
+            logger.info("已保存到数据库")
+        else:
+            logger.warning(f"检测未成功: {result.get('error', '未知错误')}")
+        
+        return result
+    except Exception as e:
+        logger.error(f"处理上传视频时出错: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": f"处理视频时出错: {str(e)}"}
+        )
+    finally:
+        # 确保临时文件被删除
+        if file_path and os.path.exists(file_path):
+            try:
+                os.unlink(file_path)
+                logger.info(f"已删除临时文件: {file_path}")
+            except Exception as e:
+                logger.error(f"删除临时文件失败: {file_path}, 错误: {e}")
 
 class VideoStreamer:
     def __init__(self, video_source, model_path="public/yolov8n_7_11.pt"):
@@ -152,20 +424,70 @@ class VideoStreamer:
         # 获取检测结果
         result = results[0]  # 单帧结果
 
-        #######修改
         # 修改检测结果中的bird标签为bottle
         for box in result.boxes:
             cls = int(box.cls)
             if result.names[cls] == 'bird':
                 result.names[cls] = 'bottle'
         
-
+        # 检查是否需要记录所有类型（配置中包含*）
+        record_all_types = '*' in config["detect_types"]
+        
+        # 收集所有检测到的物体类型
+        all_detected_types = {}
+        for box in result.boxes:
+            cls = int(box.cls)
+            type_name = result.names[cls]
+            if type_name not in all_detected_types:
+                all_detected_types[type_name] = 1
+            else:
+                all_detected_types[type_name] += 1
+        
+        # 确定需要记录的类型
+        detected_types_to_record = {}
+        if record_all_types and all_detected_types:
+            # 如果配置中有*且检测到物体，记录所有类型
+            detected_types_to_record = all_detected_types
+        else:
+            # 否则只记录配置中指定的类型
+            for box in result.boxes:
+                cls = int(box.cls)
+                type_name = result.names[cls]
+                if type_name in config["detect_types"]:
+                    if type_name not in detected_types_to_record:
+                        detected_types_to_record[type_name] = 1
+                    else:
+                        detected_types_to_record[type_name] += 1
+        
         # 在原图上绘制边界框和标签
         annotated_frame = result.plot(
             conf=True,  # 显示置信度
             line_width=2,  # 边界框线条宽度
             font_size=12  # 标签字体大小
         )
+        
+        # 如果检测到需要记录的类型，保存图片并记录到数据库
+        if detected_types_to_record:
+            # 保存图片
+            now = datetime.datetime.now()
+            date_str = now.strftime("%Y%m%d_%H%M%S")
+            
+            # 生成唯一文件名
+            unique_id = str(uuid.uuid4()).replace("-", "")
+            filename = f"{date_str}_{unique_id}.jpg"
+            image_path = os.path.join(config["history_path"], filename)
+            
+            # 保存图片
+            cv2.imwrite(image_path, annotated_frame)
+            
+            # 将所有检测到的类型合并为一个字符串，用逗号分隔
+            all_types_str = ",".join(all_detected_types.keys())
+            
+            # 记录到数据库
+            relative_path = f"/history/{filename}"  # 使用相对路径存储
+            save_history_record(all_types_str, relative_path)
+            
+            logger.info(f"已记录历史: 类型={all_types_str}, 图片={image_path}")
 
         # 获取检测统计信息
         detections = len(result.boxes)
@@ -322,12 +644,64 @@ class RTMPStreamer:
                 if result.names[cls] == 'bird':
                     result.names[cls] = 'bottle'
 
+            # 检查是否需要记录所有类型（配置中包含*）
+            record_all_types = '*' in config["detect_types"]
+            
+            # 收集所有检测到的物体类型
+            all_detected_types = {}
+            for box in result.boxes:
+                cls = int(box.cls)
+                type_name = result.names[cls]
+                if type_name not in all_detected_types:
+                    all_detected_types[type_name] = 1
+                else:
+                    all_detected_types[type_name] += 1
+            
+            # 确定需要记录的类型
+            detected_types_to_record = {}
+            if record_all_types and all_detected_types:
+                # 如果配置中有*且检测到物体，记录所有类型
+                detected_types_to_record = all_detected_types
+            else:
+                # 否则只记录配置中指定的类型
+                for box in result.boxes:
+                    cls = int(box.cls)
+                    type_name = result.names[cls]
+                    if type_name in config["detect_types"]:
+                        if type_name not in detected_types_to_record:
+                            detected_types_to_record[type_name] = 1
+                        else:
+                            detected_types_to_record[type_name] += 1
+            
             # 在原图上绘制边界框和标签
             annotated_frame = result.plot(
                 conf=True,  # 显示置信度
                 line_width=2,  # 边界框线条宽度
                 font_size=12  # 标签字体大小
             )
+            
+            # 如果检测到需要记录的类型，保存图片并记录到数据库
+            if detected_types_to_record:
+                # 保存图片
+                now = datetime.datetime.now()
+                date_str = now.strftime("%Y%m%d_%H%M%S")
+                
+                # 生成唯一文件名
+                unique_id = str(uuid.uuid4()).replace("-", "")
+                filename = f"{date_str}_{unique_id}.jpg"
+                image_path = os.path.join(config["history_path"], filename)
+                
+                # 保存图片
+                cv2.imwrite(image_path, annotated_frame)
+                
+                # 将所有检测到的类型合并为一个字符串，用逗号分隔
+                all_types_str = ",".join(all_detected_types.keys())
+                
+                # 记录到数据库
+                relative_path = f"..\\history\\{filename}"  # 使用相对路径存储
+                save_history_record(all_types_str, relative_path)
+                
+                logger.info(f"已记录历史: 类型={all_types_str}, 图片={image_path}")
 
             # 获取检测统计信息
             detections = len(result.boxes)
@@ -562,23 +936,20 @@ async def rtmp_websocket_endpoint(websocket: WebSocket, rtmp_url: str = None):
         else:
             logger.info(f"WebSocket连接已处于 {websocket.client_state} 状态，无需关闭")
 
-@app.get("/")
-async def get_index():
-    """返回API信息"""
-    return {
-        "message": "污水监控视频流API",
-        "endpoints": {
-            "local_video": "/ws/video",
-            "rtmp_stream": "/ws/rtmp?rtmp_url=<RTMP_URL> 或 /ws/rtmp (使用配置文件中的URL)"
-        },
-        "examples": {
-            "custom_rtmp": "/ws/rtmp?rtmp_url=rtmp://example.com/live/stream",
-            "default_rtmp": "/ws/rtmp (使用配置的URL: " + config["rtmp_url"] + ")"
-        },
-        "config_file": "../config.xml"
-    }
 
-# 运行应用时指定端口
+
 if __name__ == "__main__":
+    # 确保历史记录目录存在
+    os.makedirs(config["history_path"], exist_ok=True)
+    
+    # 初始化数据库
+    init_database()
+    
+    # 启动应用
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8081)
+
+    uvicorn.run(
+        app,
+        host=config.get("host", "localhost"),
+        port=config.get("port", 8081)
+    )

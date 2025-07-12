@@ -20,7 +20,7 @@
 <script setup>
 import { ref } from 'vue'
 
-const systemName = ref('智能监控系统')
+const systemName = ref('污水监测系统')
 </script>
 
 <style scoped>

@@ -118,7 +118,18 @@ INSERT INTO task (title, description, status, priority, deadline) VALUES
     ('解决网络问题', '解决办公室网络故障', 'DOING', 'HIGHEST', '2025-06-20 11:00:00'),
     ('编写项目总结', '编写项目结项报告', 'TODO', 'HIGH', '2025-06-30 00:00:00');
 
+CREATE TABLE IF NOT EXISTS history (
+    id INT PRIMARY KEY AUTO_INCREMENT COMMENT '历史ID',
+    taskId INT COMMENT '关联的任务ID',
+    type VARCHAR(20) NOT NULL COMMENT '污染类型',
+    src VARCHAR(255) NOT NULL COMMENT '污染图片路径',
+    createdTime DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='历史记录表';
 
+INSERT INTO history (type, src) VALUES
+    ('bottle', '/example/image1.jpg'),
+    ('bottle', '/example/image2.jpg'),
+    ('bottle', '/example/image3.jpg');
 
 
 
