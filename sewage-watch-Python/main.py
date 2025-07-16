@@ -641,8 +641,10 @@ class RTMPStreamer:
             # 修改检测结果中的bird标签为bottle
             for box in result.boxes:
                 cls = int(box.cls)
+                # result.names[cls] = 'bottle'
                 if result.names[cls] == 'bird':
                     result.names[cls] = 'bottle'
+                
 
             # 检查是否需要记录所有类型（配置中包含*）
             record_all_types = '*' in config["detect_types"]

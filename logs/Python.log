@@ -1,0 +1,83 @@
+INFO:__main__:已从配置文件加载RTMP URL: rtmp://localhost:1935/live/stream1
+INFO:__main__:已从配置文件加载数据库配置: localhost:3306
+INFO:__main__:已从配置文件加载历史记录配置: ../Vue/public/history, 检测类型: ['*', 'bottle', 'bird']
+D:\项目\sewageWatch\sewage-watch-Python\main.py:259: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("startup")
+D:\项目\sewageWatch\sewage-watch-Python\main.py:265: DeprecationWarning: 
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+        
+  @app.on_event("shutdown")
+INFO:detection:YOLO模型初始化成功: public/yolov8n_7_11.pt
+INFO:__main__:数据库表初始化成功
+INFO:     Started server process [26924]
+INFO:     Waiting for application startup.
+INFO:__main__:已应用增强FFmpeg优化环境变量: rtsp_transport;tcp;probesize;10000000;analyzeduration;10000000;flags;low_delay;fflags;nobuffer+fastseek+flush_packets;max_delay;0;thread_type;frame;threads;1;err_detect;ignore_err;skip_frame;nokey
+INFO:__main__:数据库表初始化成功
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://localhost:8081 (Press CTRL+C to quit)
+INFO:__main__:进行连接尝试
+INFO:__main__:websocket <starlette.websockets.WebSocket object at 0x0000026FA5087740>
+INFO:     ('::1', 54968) - "WebSocket /ws/video" [accepted]
+
+0: 384x640 1 bird, 68.8ms
+Speed: 4.3ms preprocess, 68.8ms inference, 1.5ms postprocess per image at shape (1, 3, 384, 640)
+INFO:__main__:历史记录已保存: bottle, /history/20250714_181755_c325da154b3a469b8399183e7036a7f3.jpg
+INFO:__main__:已记录历史: 类型=bottle, 图片=../Vue/public/history\20250714_181755_c325da154b3a469b8399183e7036a7f3.jpg
+INFO:     connection open
+ERROR:__main__:视频流错误: 
+ERROR:    Exception in ASGI application
+Traceback (most recent call last):
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\uvicorn\protocols\websockets\websockets_impl.py", line 243, in run_asgi
+    result = await self.app(self.scope, self.asgi_receive, self.asgi_send)  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\uvicorn\middleware\proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\applications.py", line 1054, in __call__
+    await super().__call__(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\applications.py", line 112, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\errors.py", line 152, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\base.py", line 100, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\cors.py", line 77, in __call__
+    await self.app(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\middleware\exceptions.py", line 62, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 714, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 734, in app
+    await route.handle(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 362, in handle
+    await self.app(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 95, in app
+    await wrap_app_handling_exceptions(app, session)(scope, receive, send)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\routing.py", line 93, in app
+    await func(session)
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\fastapi\routing.py", line 383, in app
+    await dependant.call(**solved_result.values)
+  File "D:\项目\sewageWatch\sewage-watch-Python\main.py", line 891, in websocket_endpoint
+    await websocket.close()
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\websockets.py", line 180, in close
+    await self.send({"type": "websocket.close", "code": code, "reason": reason or ""})
+  File "C:\Users\lenovo\AppData\Local\Programs\Python\Python312\Lib\site-packages\starlette\websockets.py", line 97, in send
+    raise RuntimeError('Cannot call "send" once a close message has been sent.')
+RuntimeError: Cannot call "send" once a close message has been sent.
+INFO:     connection closed

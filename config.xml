@@ -27,7 +27,7 @@
         <storage_path>../Vue/public/history</storage_path>
         <detect_types>
             <!-- 记录所有类型 -->
-            <!-- <type>*</type> -->
+            <type>*</type>
             <type>bottle</type>
             <type>bird</type>
             <!-- 添加其他需要记录的类型 -->
