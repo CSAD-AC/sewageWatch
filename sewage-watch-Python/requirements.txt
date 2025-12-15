@@ -1,0 +1,20 @@
+# Python依赖文件
+# 基础依赖
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Web服务相关
+fastapi>=0.100.0
+uvicorn>=0.23.0
+python-multipart>=0.0.6
+
+# 数据库相关
+pymysql>=1.0.0
+mysql-connector-python>=8.0.30
+cryptography>=41.0.0
+
+# 目标检测相关
+ultralytics>=8.0.0
+
+# 其他依赖
+pathlib2>=2.3.7

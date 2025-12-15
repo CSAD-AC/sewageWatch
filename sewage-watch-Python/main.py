@@ -3,12 +3,11 @@ import base64
 import asyncio
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, File, UploadFile, Form
-import math
-from fastapi import HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.websockets import WebSocketState
+from contextlib import asynccontextmanager
 import logging
 import threading
 import queue
@@ -19,11 +18,9 @@ from pathlib import Path
 import pymysql
 import datetime
 import uuid
-import shutil
-from typing import List, Optional
 
 from ultralytics import YOLO
-from detection import DetectionProcessor
+from detection import DetectionProcessor, RTMPRecorder
 
 # 保存原始环境变量值，以便在程序退出时恢复
 original_ffmpeg_options = os.environ.get('OPENCV_FFMPEG_CAPTURE_OPTIONS')
@@ -160,6 +157,65 @@ def init_database():
                     createdTime DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间'
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='历史记录表';
                 """)
+                
+                # 创建分析任务表
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS analysis_tasks (
+                    id INT PRIMARY KEY AUTO_INCREMENT COMMENT '任务ID',
+                    source_video VARCHAR(255) NOT NULL COMMENT '源视频文件名',
+                    start_time DATETIME NOT NULL COMMENT '分析开始时间',
+                    end_time DATETIME DEFAULT NULL COMMENT '分析结束时间',
+                    status VARCHAR(20) DEFAULT 'pending' COMMENT '任务状态',
+                    total_frames INT DEFAULT 0 COMMENT '总帧数',
+                    frames_processed INT DEFAULT 0 COMMENT '已处理帧数',
+                    structured_data_path VARCHAR(255) DEFAULT NULL COMMENT '结构化数据文件路径'
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='分析任务表';
+                """)
+                
+                # 创建视频帧表
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS video_frames (
+                    id INT PRIMARY KEY AUTO_INCREMENT COMMENT '帧ID',
+                    task_id INT NOT NULL COMMENT '关联的任务ID',
+                    frame_index INT NOT NULL COMMENT '帧索引',
+                    time_seconds FLOAT NOT NULL COMMENT '帧时间(秒)',
+                    image_path VARCHAR(255) NOT NULL COMMENT '帧图片路径',
+                    detected_types VARCHAR(255) NOT NULL COMMENT '检测到的物体类型',
+                    total_objects INT DEFAULT 0 COMMENT '物体总数',
+                    FOREIGN KEY (task_id) REFERENCES analysis_tasks(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='视频帧表';
+                """)
+                
+                # 创建检测物体表
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS detected_objects (
+                    id INT PRIMARY KEY AUTO_INCREMENT COMMENT '物体ID',
+                    frame_id INT NOT NULL COMMENT '关联的帧ID',
+                    type VARCHAR(50) NOT NULL COMMENT '物体类型',
+                    confidence FLOAT NOT NULL COMMENT '置信度',
+                    x1 FLOAT NOT NULL COMMENT '边界框左上角X',
+                    y1 FLOAT NOT NULL COMMENT '边界框左上角Y',
+                    x2 FLOAT NOT NULL COMMENT '边界框右下角X',
+                    y2 FLOAT NOT NULL COMMENT '边界框右下角Y',
+                    center_x FLOAT NOT NULL COMMENT '中心点X坐标',
+                    center_y FLOAT NOT NULL COMMENT '中心点Y坐标',
+                    width FLOAT NOT NULL COMMENT '宽度',
+                    height FLOAT NOT NULL COMMENT '高度',
+                    FOREIGN KEY (frame_id) REFERENCES video_frames(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='检测物体表';
+                """)
+                
+                # 创建结构化数据表
+                cursor.execute("""
+                CREATE TABLE IF NOT EXISTS structured_data (
+                    id INT PRIMARY KEY AUTO_INCREMENT COMMENT '数据ID',
+                    task_id INT NOT NULL COMMENT '关联的任务ID',
+                    file_path VARCHAR(255) NOT NULL COMMENT '文件路径',
+                    created_time DATETIME DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+                    FOREIGN KEY (task_id) REFERENCES analysis_tasks(id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='结构化数据表';
+                """)
+                
                 connection.commit()
                 logger.info("数据库表初始化成功")
             connection.close()
@@ -193,6 +249,9 @@ def save_history_record(type_name, image_path, task_id=None):
         logger.error(f"保存历史记录失败: {e}")
         return False
 
+# 全局录制器字典，用于存储活动的录制任务
+active_recorders = {}
+
 def apply_h264_optimizations():
     """设置环境变量以优化FFmpeg的H.264解码"""
     ffmpeg_options = {
@@ -222,7 +281,30 @@ def clear_h264_optimizations():
         os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = original_ffmpeg_options
         logger.info("已恢复原始FFmpeg环境变量。")
 
-app = FastAPI()
+# 使用asynccontextmanager定义应用的生命周期事件处理器
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用的生命周期事件处理器"""
+    # 启动事件
+    apply_h264_optimizations()
+    init_database()
+    
+    yield  # 这是应用运行的部分
+    
+    # 关闭事件
+    clear_h264_optimizations()
+    
+    # 清理临时上传目录
+    try:
+        for file in os.listdir(TEMP_UPLOAD_DIR):
+            file_path = os.path.join(TEMP_UPLOAD_DIR, file)
+            if os.path.isfile(file_path):
+                os.unlink(file_path)
+        logger.info("已清理临时上传目录")
+    except Exception as e:
+        logger.error(f"清理临时上传目录时出错: {e}")
+
+app = FastAPI(lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -252,30 +334,15 @@ async def log_requests(request, call_next):
         logger.error(f"请求处理异常: {method} {path} - 耗时: {process_time:.4f}秒 - 错误: {str(e)}")
         raise
 
-# 配置静态文件服务，使前端能够访问历史图片
+# 配置静态文件服务，使前端能够访问静态资源
+# 使用Path确保路径格式跨平台兼容
+# 配置public目录（用于存放HTML页面和模型文件）
+public_dir = Path("public")
+app.mount("/public", StaticFiles(directory=str(public_dir.resolve())), name="public")
+
+# 配置history目录（用于访问历史图片）
 history_dir = Path(config["history_path"])
-app.mount("/history", StaticFiles(directory=str(history_dir)), name="history")
-
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时执行"""
-    apply_h264_optimizations()
-    init_database()
-
-@app.on_event("shutdown")
-def shutdown_event():
-    """应用关闭时执行"""
-    clear_h264_optimizations()
-    
-    # 清理临时上传目录
-    try:
-        for file in os.listdir(TEMP_UPLOAD_DIR):
-            file_path = os.path.join(TEMP_UPLOAD_DIR, file)
-            if os.path.isfile(file_path):
-                os.unlink(file_path)
-        logger.info("已清理临时上传目录")
-    except Exception as e:
-        logger.error(f"清理临时上传目录时出错: {e}")
+app.mount("/history", StaticFiles(directory=str(history_dir.resolve())), name="history")
 
 # 创建检测处理器实例
 detection_processor = DetectionProcessor(
@@ -283,6 +350,159 @@ detection_processor = DetectionProcessor(
     history_path=config["history_path"],
     detect_types=config["detect_types"]
 )
+
+@app.post("/rtmp/start-recording")
+async def start_rtmp_recording(rtmp_url: str = Form(None), max_duration: int = Form(3600)):
+    """
+    开始录制RTMP流
+    
+    Args:
+        rtmp_url: RTMP流地址，如果未提供则使用配置中的默认地址
+        max_duration: 最大录制时长(秒)，默认3600秒(1小时)
+    
+    Returns:
+        JSONResponse: 包含录制任务ID和文件路径的响应
+    """
+    try:
+        # 如果未提供RTMP URL，则使用配置中的默认URL
+        if not rtmp_url:
+            rtmp_url = config["rtmp_url"]
+            logger.info(f"未提供RTMP URL，使用配置中的默认URL: {rtmp_url}")
+        else:
+            logger.info(f"接收到RTMP录制请求，URL: {rtmp_url}, 最大时长: {max_duration}秒")
+        
+        # 创建录制器
+        recorder = RTMPRecorder(
+            rtmp_url=rtmp_url,
+            output_dir=TEMP_UPLOAD_DIR,
+            max_duration=max_duration
+        )
+        
+        # 开始录制
+        output_file = recorder.start_recording()
+        if not output_file:
+            return JSONResponse(
+                status_code=500,
+                content={"success": False, "error": "启动录制失败"}
+            )
+        
+        # 生成任务ID
+        task_id = str(uuid.uuid4())
+        active_recorders[task_id] = recorder
+        
+        logger.info(f"RTMP流录制已开始，任务ID: {task_id}, 文件: {output_file}")
+        
+        return JSONResponse({
+            "success": True,
+            "task_id": task_id,
+            "output_file": output_file,
+            "rtmp_url": rtmp_url,
+            "message": "RTMP流录制已开始"
+        })
+    except Exception as e:
+        logger.error(f"启动RTMP录制时出错: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.post("/rtmp/stop-recording")
+async def stop_rtmp_recording(task_id: str = Form(...), analyze: bool = Form(True), frame_interval: int = Form(30)):
+    """
+    停止RTMP流录制并可选地进行分析
+    
+    Args:
+        task_id: 录制任务ID
+        analyze: 是否对录制的视频进行分析，默认True
+        frame_interval: 分析时的帧间隔，默认每30帧处理一次
+    
+    Returns:
+        JSONResponse: 包含录制结果和分析结果的响应
+    """
+    try:
+        # 检查任务ID是否存在
+        if task_id not in active_recorders:
+            return JSONResponse(
+                status_code=404,
+                content={"success": False, "error": f"任务ID不存在: {task_id}"}
+            )
+        
+        logger.info(f"接收到停止录制请求，任务ID: {task_id}, 是否分析: {analyze}")
+        
+        # 获取录制器并停止录制
+        recorder = active_recorders[task_id]
+        video_path = recorder.stop_recording()
+        
+        # 从活动列表中移除
+        del active_recorders[task_id]
+        
+        result = {
+            "success": True,
+            "video_path": video_path,
+            "message": "RTMP流录制已停止"
+        }
+        
+        # 如果需要分析视频
+        if analyze and video_path and os.path.exists(video_path):
+            logger.info(f"开始分析录制的视频: {video_path}, 帧间隔: {frame_interval}")
+            
+            # 使用检测处理器分析视频
+            analysis_result = detection_processor.process_video(
+                video_path=video_path,
+                save_frames=True,
+                frame_interval=frame_interval
+            )
+            
+            if analysis_result.get("success", False):
+                logger.info(f"视频分析完成，检测到 {analysis_result.get('total_saved_frames', 0)} 个包含物体的帧")
+                
+                # 保存到数据库，传递任务ID
+                detection_processor.save_to_database(get_db_connection, analysis_result, task_id)
+                
+                # 添加分析结果到响应
+                result["analysis_result"] = analysis_result
+            else:
+                logger.warning(f"视频分析失败: {analysis_result.get('error', '未知错误')}")
+                result["analysis_error"] = analysis_result.get('error', '未知错误')
+        
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"停止RTMP录制时出错: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
+
+@app.get("/rtmp/active-tasks")
+async def get_active_tasks():
+    """
+    获取所有活动的RTMP录制任务
+    
+    Returns:
+        JSONResponse: 包含活动任务列表的响应
+    """
+    try:
+        tasks = []
+        for task_id, recorder in active_recorders.items():
+            tasks.append({
+                "task_id": task_id,
+                "rtmp_url": recorder.rtmp_url,
+                "output_file": recorder.output_file,
+                "is_recording": recorder.is_recording,
+                "recording_time": time.time() - recorder.start_time if recorder.start_time else 0
+            })
+        
+        return JSONResponse({
+            "success": True,
+            "active_tasks": tasks,
+            "total_tasks": len(tasks)
+        })
+    except Exception as e:
+        logger.error(f"获取活动任务时出错: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"success": False, "error": str(e)}
+        )
 
 @app.post("/detect/image")
 async def detect_image(file: UploadFile = File(...)):

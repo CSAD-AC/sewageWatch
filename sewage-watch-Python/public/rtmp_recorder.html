@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RTMP流录制与分析工具</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: 500;
+            color: #555;
+        }
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .buttons {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        #startBtn {
+            background-color: #4CAF50;
+            color: white;
+        }
+        #startBtn:hover {
+            background-color: #45a049;
+        }
+        #stopBtn {
+            background-color: #f44336;
+            color: white;
+        }
+        #stopBtn:hover {
+            background-color: #d32f2f;
+        }
+        #tasksBtn {
+            background-color: #2196F3;
+            color: white;
+        }
+        #tasksBtn:hover {
+            background-color: #0b7dda;
+        }
+        .results {
+            background-color: #f9f9f9;
+            padding: 15px;
+            border-radius: 4px;
+            border: 1px solid #e0e0e0;
+            margin-top: 20px;
+        }
+        h2 {
+            font-size: 18px;
+            margin-top: 0;
+            color: #333;
+        }
+        pre {
+            background-color: #f5f5f5;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 12px;
+        }
+        .task-id-display {
+            background-color: #e3f2fd;
+            padding: 8px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        .success {
+            color: #4CAF50;
+        }
+        .error {
+            color: #f44336;
+        }
+        .info {
+            color: #2196F3;
+        }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(0, 0, 0, 0.1);
+            border-radius: 50%;
+            border-top-color: #4CAF50;
+            animation: spin 1s ease-in-out infinite;
+            vertical-align: middle;
+            margin-left: 10px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>RTMP流录制与分析工具</h1>
+        
+        <div class="form-group">
+            <label for="rtmpUrl">RTMP流地址</label>
+            <input type="text" id="rtmpUrl" placeholder="例如: rtmp://localhost/live/stream">
+        </div>
+        
+        <div class="form-group">
+            <label for="maxDuration">最大录制时长(秒)</label>
+            <input type="number" id="maxDuration" value="3600" min="60" max="86400">
+        </div>
+        
+        <div class="form-group">
+            <label for="frameInterval">分析帧间隔(帧)</label>
+            <input type="number" id="frameInterval" value="30" min="1" max="60">
+        </div>
+        
+        <div class="buttons">
+            <button id="startBtn">开始录制</button>
+            <button id="stopBtn" disabled>停止录制</button>
+            <button id="tasksBtn">查看活动任务</button>
+        </div>
+        
+        <div id="currentTaskDisplay" style="display: none;">
+            <h2>当前录制任务</h2>
+            <div class="task-id-display">
+                <strong>任务ID:</strong> <span id="currentTaskId"></span>
+            </div>
+            <div class="task-id-display">
+                <strong>输出文件:</strong> <span id="currentOutputFile"></span>
+            </div>
+        </div>
+        
+        <div class="results">
+            <h2>操作结果</h2>
+            <pre id="resultOutput"></pre>
+        </div>
+    </div>
+    
+    <script>
+        // 当前录制任务ID
+        let currentTaskId = null;
+        
+        // DOM 元素
+        const rtmpUrlInput = document.getElementById('rtmpUrl');
+        const maxDurationInput = document.getElementById('maxDuration');
+        const frameIntervalInput = document.getElementById('frameInterval');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const tasksBtn = document.getElementById('tasksBtn');
+        const resultOutput = document.getElementById('resultOutput');
+        const currentTaskDisplay = document.getElementById('currentTaskDisplay');
+        const currentTaskIdElement = document.getElementById('currentTaskId');
+        const currentOutputFileElement = document.getElementById('currentOutputFile');
+        
+        // 显示结果
+        function showResult(data, isError = false) {
+            const jsonStr = JSON.stringify(data, null, 2);
+            resultOutput.textContent = jsonStr;
+            resultOutput.className = isError ? 'error' : 'success';
+        }
+        
+        // 显示加载状态
+        function showLoading(button) {
+            const originalText = button.textContent;
+            button.disabled = true;
+            button.innerHTML = `${originalText} <div class="loading"></div>`;
+            return originalText;
+        }
+        
+        // 隐藏加载状态
+        function hideLoading(button, originalText) {
+            button.disabled = false;
+            button.textContent = originalText;
+        }
+        
+        // 开始录制
+        startBtn.addEventListener('click', async () => {
+            const originalText = showLoading(startBtn);
+            
+            try {
+                const rtmpUrl = rtmpUrlInput.value.trim() || null;
+                const maxDuration = parseInt(maxDurationInput.value);
+                
+                const formData = new FormData();
+                if (rtmpUrl) formData.append('rtmp_url', rtmpUrl);
+                formData.append('max_duration', maxDuration);
+                
+                const response = await fetch('/rtmp/start-recording', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // 保存当前任务ID
+                    currentTaskId = data.task_id;
+                    
+                    // 更新UI
+                    currentTaskIdElement.textContent = currentTaskId;
+                    currentOutputFileElement.textContent = data.output_file;
+                    currentTaskDisplay.style.display = 'block';
+                    
+                    // 启用停止按钮
+                    stopBtn.disabled = false;
+                    
+                    showResult(data);
+                } else {
+                    showResult(data, true);
+                }
+            } catch (error) {
+                showResult({ success: false, error: error.message }, true);
+            } finally {
+                hideLoading(startBtn, originalText);
+            }
+        });
+        
+        // 停止录制
+        stopBtn.addEventListener('click', async () => {
+            if (!currentTaskId) {
+                showResult({ success: false, error: '没有正在进行的录制任务' }, true);
+                return;
+            }
+            
+            const originalText = showLoading(stopBtn);
+            
+            try {
+                const analyze = true; // 始终进行分析
+                const frameInterval = parseInt(frameIntervalInput.value);
+                
+                const formData = new FormData();
+                formData.append('task_id', currentTaskId);
+                formData.append('analyze', analyze.toString());
+                formData.append('frame_interval', frameInterval);
+                
+                const response = await fetch('/rtmp/stop-recording', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    // 重置当前任务ID
+                    currentTaskId = null;
+                    
+                    // 更新UI
+                    currentTaskDisplay.style.display = 'none';
+                    stopBtn.disabled = true;
+                    
+                    showResult(data);
+                } else {
+                    showResult(data, true);
+                }
+            } catch (error) {
+                showResult({ success: false, error: error.message }, true);
+            } finally {
+                hideLoading(stopBtn, originalText);
+            }
+        });
+        
+        // 查看活动任务
+        tasksBtn.addEventListener('click', async () => {
+            const originalText = showLoading(tasksBtn);
+            
+            try {
+                const response = await fetch('/rtmp/active-tasks', {
+                    method: 'GET'
+                });
+                
+                const data = await response.json();
+                showResult(data);
+            } catch (error) {
+                showResult({ success: false, error: error.message }, true);
+            } finally {
+                hideLoading(tasksBtn, originalText);
+            }
+        });
+        
+        // 页面加载时尝试获取活动任务
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch('/rtmp/active-tasks', {
+                    method: 'GET'
+                });
+                
+                const data = await response.json();
+                if (data.success && data.active_tasks && data.active_tasks.length > 0) {
+                    showResult({ info: `有 ${data.active_tasks.length} 个活动任务` });
+                }
+            } catch (error) {
+                // 静默错误，不显示
+            }
+        });
+    </script>
+</body>
+</html>
